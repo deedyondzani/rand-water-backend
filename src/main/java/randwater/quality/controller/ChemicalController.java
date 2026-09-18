@@ -1,0 +1,298 @@
+package randwater.quality.controller;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import randwater.quality.dto.CylinderDTO;
+import randwater.quality.dto.TankDTO;
+import randwater.quality.entity.BulkStorage;
+import randwater.quality.entity.CylinderState;
+import randwater.quality.entity.TankState;
+import randwater.quality.repository.BulkStorageRepository;
+import randwater.quality.repository.CylinderStateRepository;
+import randwater.quality.repository.TankStateRepository;
+import randwater.quality.service.AuditLogService;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+@RestController
+@CrossOrigin(origins = "*")
+public class ChemicalController {
+
+    @Autowired private CylinderStateRepository cylinderRepo;
+    @Autowired private TankStateRepository tankRepo;
+    @Autowired private BulkStorageRepository bulkRepo;
+    @Autowired private AuditLogService auditLogService;
+
+    private static final int PALMIET_MAX_LITERS = 34500;
+    private static final int EIKENHOF_MAX_LITERS = 14000;
+    private static final int ZWARTKOPJES_MAX_LITERS = 14000;
+
+    private int maxLitersFor(String plant) {
+        if (plant == null) return 14000;
+        switch (plant.toLowerCase()) {
+            case "palmiet": return PALMIET_MAX_LITERS;
+            case "eikenhof": return EIKENHOF_MAX_LITERS;
+            case "zwartkopjes": return ZWARTKOPJES_MAX_LITERS;
+            default: return 14000;
+        }
+    }
+
+    // ================ CHLORINE CYLINDERS ================
+    @GetMapping("/api/chemical/cl2/{plant}")
+    public List<CylinderDTO> getCylinders(@PathVariable String plant) {
+        return cylinderRepo.findByPlantNameOrderByRoomNumberAscSlotNumberAsc(plant)
+            .stream()
+            .map(c -> new CylinderDTO(c.getId(), c.getPlantName(), c.getRoomNumber(),
+                                      c.getSlotNumber(), c.getStatus()))
+            .collect(Collectors.toList());
+    }
+
+    @PutMapping("/api/chemical/cl2/{id}/status")
+    public ResponseEntity<?> setCylinderStatus(@PathVariable Integer id,
+                                               @RequestBody Map<String, String> body) {
+        String status = body.get("status");
+        if (status == null || status.isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "status required"));
+
+        Optional<CylinderState> opt = cylinderRepo.findById(id);
+        if (opt.isEmpty()) return ResponseEntity.notFound().build();
+
+        CylinderState cyl = opt.get();
+        String oldStatus = cyl.getStatus();
+
+        // ---- No-op guard: skip DB write + audit if nothing changed ----
+        if (Objects.equals(oldStatus, status)) {
+            return ResponseEntity.ok(new CylinderDTO(cyl.getId(), cyl.getPlantName(),
+                cyl.getRoomNumber(), cyl.getSlotNumber(), cyl.getStatus()));
+        }
+
+        cyl.setStatus(status);
+        cylinderRepo.save(cyl);
+
+        try {
+            String details = String.format("Cylinder slot %d (Room %d) changed %s to %s",
+                cyl.getSlotNumber(), cyl.getRoomNumber(), oldStatus, status);
+            auditLogService.log("admin", cyl.getPlantName(), "CL2_CYLINDER", details, "api");
+        } catch (Exception e) { }
+
+        return ResponseEntity.ok(new CylinderDTO(cyl.getId(), cyl.getPlantName(),
+            cyl.getRoomNumber(), cyl.getSlotNumber(), cyl.getStatus()));
+    }
+
+    // ---- BATCH CYLINDER UPDATE (single audit entry) ----
+    @PutMapping("/api/chemical/cl2/batch-status")
+    @SuppressWarnings("unchecked")
+    public ResponseEntity<?> batchSetCylinderStatus(@RequestBody Map<String, Object> body) {
+        String plant = (String) body.get("plant");
+        List<Map<String, Object>> changes = (List<Map<String, Object>>) body.get("changes");
+
+        if (changes == null || changes.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "changes required"));
+        }
+
+        List<String> details = new ArrayList<>();
+        int updated = 0;
+
+        for (Map<String, Object> change : changes) {
+            try {
+                Integer id = Integer.parseInt(change.get("id").toString());
+                String status = change.get("status").toString();
+
+                Optional<CylinderState> opt = cylinderRepo.findById(id);
+                if (opt.isEmpty()) continue;
+
+                CylinderState cyl = opt.get();
+                String oldStatus = cyl.getStatus();
+                if (Objects.equals(oldStatus, status)) continue;
+
+                cyl.setStatus(status);
+                cylinderRepo.save(cyl);
+                updated++;
+                details.add(String.format("Room %d slot %d: %s -> %s",
+                    cyl.getRoomNumber(), cyl.getSlotNumber(), oldStatus, status));
+            } catch (Exception ignored) {}
+        }
+
+        if (updated > 0) {
+            try {
+                String detail = String.format("Batch update (%d cylinders): %s",
+                    updated, String.join("; ", details));
+                auditLogService.log("admin", plant, "CL2_CYLINDER", detail, "api");
+            } catch (Exception ignored) {}
+        }
+
+        return ResponseEntity.ok(Map.of("updated", updated));
+    }
+
+    // ---- BANK-LEVEL SET (Eikenhof) ----
+    @PutMapping("/api/chemical/cl2/plant/{plant}/room/{room}/status")
+    public ResponseEntity<?> setBankStatus(@PathVariable String plant,
+                                           @PathVariable Integer room,
+                                           @RequestBody Map<String, String> body) {
+        String status = body.get("status");
+        if (status == null || status.isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "status required"));
+
+        List<CylinderState> list = cylinderRepo.findByPlantNameOrderByRoomNumberAscSlotNumberAsc(plant)
+            .stream()
+            .filter(c -> c.getRoomNumber().equals(room))
+            .collect(Collectors.toList());
+
+        int changed = 0;
+        for (CylinderState c : list) {
+            if (!Objects.equals(c.getStatus(), status)) {
+                c.setStatus(status);
+                cylinderRepo.save(c);
+                changed++;
+            }
+        }
+
+        // Only log if something actually changed
+        if (changed > 0) {
+            try {
+                String roomLabel = "Room " + room;
+                if ("Eikenhof".equalsIgnoreCase(plant)) {
+                    roomLabel = (room == 1) ? "Top Plant" : "Bottom Plant";
+                }
+                auditLogService.log("admin", plant, "CL2_CYLINDER",
+                    String.format("Bank %s set to %s (%d cylinders)", roomLabel, status, changed), "api");
+            } catch (Exception e) { }
+        }
+
+        return ResponseEntity.ok(Map.of("updated", changed, "status", status));
+    }
+
+    // ---- BANK RESET TO FULL ----
+    @PutMapping("/api/chemical/cl2/plant/{plant}/room/{room}/reset")
+    public ResponseEntity<?> resetBankToFull(@PathVariable String plant,
+                                             @PathVariable Integer room) {
+        return setBankStatus(plant, room, Map.of("status", "FULL"));
+    }
+
+    // ================ NH3 TANKS ================
+    @GetMapping("/api/chemical/nh3/{plant}")
+    public List<TankDTO> getTanks(@PathVariable String plant) {
+        int max = maxLitersFor(plant);
+        return tankRepo.findByPlantNameOrderByTankNumberAsc(plant)
+            .stream()
+            .map(t -> new TankDTO(t.getId(), t.getPlantName(), t.getTankNumber(),
+                                  t.getLevel(), t.getStatus(), max))
+            .collect(Collectors.toList());
+    }
+
+    @PutMapping("/api/chemical/nh3/{id}")
+    public ResponseEntity<?> updateTank(@PathVariable Integer id,
+                                        @RequestBody Map<String, Object> body) {
+        Optional<TankState> opt = tankRepo.findById(id);
+        if (opt.isEmpty()) return ResponseEntity.notFound().build();
+
+        TankState tank = opt.get();
+        String oldStatus = tank.getStatus();
+        Integer oldLevel = tank.getLevel();
+
+        // Compute prospective new values
+        Integer newLevel = oldLevel;
+        String newStatus = oldStatus;
+        if (body.get("level") != null) {
+            newLevel = Integer.parseInt(body.get("level").toString());
+        }
+        if (body.get("status") != null) {
+            newStatus = body.get("status").toString();
+        }
+
+        // ---- No-op guard: skip DB write + audit if nothing changed ----
+        boolean levelChanged = !Objects.equals(oldLevel, newLevel);
+        boolean statusChanged = !Objects.equals(oldStatus, newStatus);
+        if (!levelChanged && !statusChanged) {
+            return ResponseEntity.ok(new TankDTO(tank.getId(), tank.getPlantName(),
+                tank.getTankNumber(), tank.getLevel(), tank.getStatus(),
+                maxLitersFor(tank.getPlantName())));
+        }
+
+        tank.setLevel(newLevel);
+        tank.setStatus(newStatus);
+        tankRepo.save(tank);
+
+        try {
+            StringBuilder details = new StringBuilder();
+            details.append("Tank ").append(tank.getTankNumber());
+            if (levelChanged) {
+                details.append(" level ").append(oldLevel).append(" to ").append(newLevel).append(" L");
+            }
+            if (statusChanged) {
+                if (levelChanged) details.append(",");
+                details.append(" status ").append(oldStatus).append(" to ").append(newStatus);
+            }
+            auditLogService.log("admin", tank.getPlantName(), "NH3_TANK", details.toString(), "api");
+        } catch (Exception e) { }
+
+        return ResponseEntity.ok(new TankDTO(tank.getId(), tank.getPlantName(),
+            tank.getTankNumber(), tank.getLevel(), tank.getStatus(),
+            maxLitersFor(tank.getPlantName())));
+    }
+
+    // ================ BULK STORAGE WAREHOUSE ================
+    @GetMapping("/api/chemical/bulk/{plant}")
+    public ResponseEntity<?> getBulk(@PathVariable String plant) {
+        Optional<BulkStorage> opt = bulkRepo.findByPlantName(plant);
+        if (opt.isEmpty()) {
+            BulkStorage bs = new BulkStorage();
+            bs.setPlantName(plant);
+            bs.setFullCount(0);
+            bs.setEmptyCount(0);
+            bs.setOcCount(0);
+            bulkRepo.save(bs);
+            return ResponseEntity.ok(bs);
+        }
+        return ResponseEntity.ok(opt.get());
+    }
+
+    @PutMapping("/api/chemical/bulk/{plant}")
+    public ResponseEntity<?> updateBulk(@PathVariable String plant,
+                                        @RequestBody Map<String, Object> body) {
+        Optional<BulkStorage> opt = bulkRepo.findByPlantName(plant);
+        BulkStorage bs;
+        if (opt.isEmpty()) {
+            bs = new BulkStorage();
+            bs.setPlantName(plant);
+        } else {
+            bs = opt.get();
+        }
+
+        int oldFull = bs.getFullCount() != null ? bs.getFullCount() : 0;
+        int oldEmpty = bs.getEmptyCount() != null ? bs.getEmptyCount() : 0;
+        int oldOc = bs.getOcCount() != null ? bs.getOcCount() : 0;
+
+        int full = body.get("fullCount") != null ? Integer.parseInt(body.get("fullCount").toString()) : oldFull;
+        int empty = body.get("emptyCount") != null ? Integer.parseInt(body.get("emptyCount").toString()) : oldEmpty;
+        int oc = body.get("ocCount") != null ? Integer.parseInt(body.get("ocCount").toString()) : oldOc;
+
+        int total = full + empty + oc;
+        if (total > 80) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Total cannot exceed 80 cylinders"));
+        }
+
+        // ---- No-op guard ----
+        if (oldFull == full && oldEmpty == empty && oldOc == oc) {
+            return ResponseEntity.ok(bs);
+        }
+
+        bs.setFullCount(full);
+        bs.setEmptyCount(empty);
+        bs.setOcCount(oc);
+        bulkRepo.save(bs);
+
+        try {
+            auditLogService.log("admin", plant, "CL2_STORAGE",
+                String.format("Bulk warehouse updated: FULL=%d, EMPTY=%d, O/C=%d", full, empty, oc), "api");
+        } catch (Exception e) { }
+
+        return ResponseEntity.ok(bs);
+    }
+}
