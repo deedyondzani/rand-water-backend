@@ -23,18 +23,12 @@ public class AuditLogService {
 
     public Page<AuditLog> getFiltered(String plant, String username, String eventType,
                                       LocalDateTime fromTs, LocalDateTime toTs,
-                                      List<String> excludeTypes,
                                       int page, int size) {
-        String excludeCsv = (excludeTypes == null || excludeTypes.isEmpty())
-            ? null
-            : String.join(",", excludeTypes);
         Pageable pageable = PageRequest.of(page, size);
-        return auditLogRepository.findWithFilters(plant, username, eventType,
-            fromTs, toTs, excludeCsv, pageable);
+        return auditLogRepository.findWithFilters(plant, username, eventType, fromTs, toTs, pageable);
     }
 
-    public AuditLog log(String username, String plantName, String eventType,
-                        String details, String ipAddress) {
+    public AuditLog log(String username, String plantName, String eventType, String details, String ipAddress) {
         AuditLog entry = new AuditLog();
         entry.setUsername(username);
         entry.setPlantName(plantName);
@@ -43,16 +37,4 @@ public class AuditLogService {
         entry.setIpAddress(ipAddress);
         return auditLogRepository.save(entry);
     }
-
-    // Distinct dates that have entries (last 30 days), newest first
-    public List<String> getAvailableDates() {
-        return auditLogRepository.findAllByOrderByEventTimestampDesc().stream()
-            .filter(a -> a.getEventTimestamp() != null)
-            .map(a -> a.getEventTimestamp().toLocalDate().toString())
-            .distinct()
-            .sorted(java.util.Comparator.reverseOrder())
-            .limit(30)
-            .collect(java.util.stream.Collectors.toList());
-    }
-
 }

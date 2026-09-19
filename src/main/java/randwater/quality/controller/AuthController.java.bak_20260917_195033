@@ -1,0 +1,157 @@
+package randwater.quality.controller;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.*;
+import randwater.quality.entity.User;
+import randwater.quality.repository.UserRepository;
+import randwater.quality.service.AuditLogService;
+import randwater.quality.service.JwtService;
+
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.Optional;
+
+@RestController
+@RequestMapping("/api/auth")
+@CrossOrigin(origins = "*")
+public class AuthController {
+
+    @Autowired private UserRepository userRepo;
+    @Autowired private JwtService jwtService;
+    @Autowired private AuditLogService auditLogService;
+
+    public static class LoginRequest {
+        public String username;
+        public String password;
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@RequestBody LoginRequest req) {
+        if (req == null || req.username == null || req.password == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "username and password required"));
+        }
+
+        Optional<User> userOpt = userRepo.findByUsername(req.username.trim());
+        if (userOpt.isEmpty()) {
+            return ResponseEntity.status(401).body(Map.of("error", "invalid credentials"));
+        }
+
+        User user = userOpt.get();
+
+        if (user.getIsActive() == null || !user.getIsActive()) {
+            return ResponseEntity.status(403).body(Map.of("error", "account is disabled"));
+        }
+
+        if (!req.password.equals(user.getPasswordHash())) {
+            return ResponseEntity.status(401).body(Map.of("error", "invalid credentials"));
+        }
+
+        String token = jwtService.generateToken(user);
+
+        user.setLastLogin(LocalDateTime.now());
+        user.setLastActive(LocalDateTime.now());
+        user.setIsOnline(true);
+        userRepo.save(user);
+
+        try {
+            auditLogService.log(user.getUsername(), null, "LOGIN",
+                user.getUsername() + " logged in", "api");
+        } catch (Exception ignored) {}
+
+        return ResponseEntity.ok(Map.of(
+            "token", token,
+            "userId", user.getUserId(),
+            "username", user.getUsername(),
+            "fullName", user.getFullName(),
+            "role", user.getRole() != null ? user.getRole().getRoleName() : "operator",
+            "roleId", user.getRole() != null ? user.getRole().getRoleId() : 3,
+            "passwordResetRequired", user.getPasswordResetRequired() != null ? user.getPasswordResetRequired() : false
+        ));
+    }
+
+    @GetMapping("/me")
+    public ResponseEntity<?> me(Authentication auth) {
+        if (auth == null || auth.getName() == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "unauthenticated"));
+        }
+        Optional<User> userOpt = userRepo.findByUsername(auth.getName());
+        if (userOpt.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("error", "user not found"));
+        }
+        User u = userOpt.get();
+        return ResponseEntity.ok(Map.of(
+            "userId", u.getUserId(),
+            "username", u.getUsername(),
+            "fullName", u.getFullName(),
+            "role", u.getRole() != null ? u.getRole().getRoleName() : "operator",
+            "roleId", u.getRole() != null ? u.getRole().getRoleId() : 3,
+            "isActive", u.getIsActive(),
+            "lastLogin", u.getLastLogin() != null ? u.getLastLogin().toString() : ""
+        ));
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout(Authentication auth) {
+        if (auth == null || auth.getName() == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "unauthenticated"));
+        }
+        Optional<User> userOpt = userRepo.findByUsername(auth.getName());
+        if (userOpt.isPresent()) {
+            User u = userOpt.get();
+            u.setIsOnline(false);
+            u.setLastActive(LocalDateTime.now());
+            userRepo.save(u);
+            try {
+                auditLogService.log(u.getUsername(), null, "LOGOUT",
+                    u.getUsername() + " logged out", "api");
+            } catch (Exception ignored) {}
+        }
+        return ResponseEntity.ok(Map.of("message", "logged out"));
+    }
+
+    // ---------- CHANGE OWN PASSWORD ----------
+    public static class ChangePasswordRequest {
+        public String currentPassword;
+        public String newPassword;
+    }
+
+    @PostMapping("/change-password")
+    public ResponseEntity<?> changePassword(Authentication auth,
+                                            @RequestBody ChangePasswordRequest req) {
+        if (auth == null || auth.getName() == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "unauthenticated"));
+        }
+        if (req == null || req.newPassword == null || req.newPassword.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "newPassword required"));
+        }
+        if (req.newPassword.trim().length() < 4) {
+            return ResponseEntity.badRequest().body(Map.of("error", "password too short (min 4)"));
+        }
+
+        Optional<User> opt = userRepo.findByUsername(auth.getName());
+        if (opt.isEmpty()) return ResponseEntity.status(404).body(Map.of("error", "user not found"));
+        User u = opt.get();
+
+        // If not a forced reset, must verify current password
+        boolean forcedReset = u.getPasswordResetRequired() != null && u.getPasswordResetRequired();
+        if (!forcedReset) {
+            if (req.currentPassword == null || !req.currentPassword.equals(u.getPasswordHash())) {
+                return ResponseEntity.status(403).body(Map.of("error", "current password incorrect"));
+            }
+        }
+
+        u.setPasswordHash(req.newPassword.trim());
+        u.setPasswordResetRequired(false);
+        userRepo.save(u);
+
+        try {
+            auditLogService.log(u.getUsername(), null, "PASSWORD_CHANGED",
+                "User '" + u.getUsername() + "' changed password", "api");
+        } catch (Exception ignored) {}
+
+        return ResponseEntity.ok(Map.of("success", true, "message", "Password updated"));
+    }
+
+}

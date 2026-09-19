@@ -1,0 +1,51 @@
+package randwater.quality.controller;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import randwater.quality.entity.AuditLog;
+import randwater.quality.service.AuditLogService;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/audit-log")
+@RequiredArgsConstructor
+@CrossOrigin(origins = "*")
+public class AuditLogController {
+
+    private final AuditLogService auditLogService;
+
+    @GetMapping
+    public Page<AuditLog> list(
+            @RequestParam(required = false) String plant,
+            @RequestParam(required = false) String username,
+            @RequestParam(required = false) String eventType,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size) {
+        return auditLogService.getFiltered(plant, username, eventType, from, to, page, size);
+    }
+
+    @GetMapping("/recent")
+    public List<AuditLog> recent() {
+        return auditLogService.getAll();
+    }
+
+    // Frontend can write custom audit entries (e.g. session saves)
+    @PostMapping
+    public ResponseEntity<?> create(@RequestBody Map<String, String> body) {
+        String eventType = body.getOrDefault("eventType", "WEB_EVENT");
+        String plantName = body.get("plantName");
+        String details = body.getOrDefault("details", "");
+        String username = body.getOrDefault("username", "admin");
+
+        AuditLog entry = auditLogService.log(username, plantName, eventType, details, "web");
+        return ResponseEntity.ok(entry);
+    }
+}

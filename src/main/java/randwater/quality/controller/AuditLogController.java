@@ -74,6 +74,13 @@ public class AuditLogController {
             excludeTypes, page, size);
     }
 
+    @GetMapping("/available-dates")
+    public ResponseEntity<?> availableDates() {
+        // Native query: list distinct dates that have entries (last 30 days)
+        List<String> dates = auditLogService.getAvailableDates();
+        return ResponseEntity.ok(Map.of("dates", dates));
+    }
+
     @GetMapping("/recent")
     public List<AuditLog> recent() {
         return auditLogService.getAll();
