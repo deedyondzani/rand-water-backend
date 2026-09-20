@@ -44,15 +44,6 @@ public class AuditLogService {
         return auditLogRepository.save(entry);
     }
 
-    public AuditLog addNote(Integer logId, String note, String username) {
-        return auditLogRepository.findById(logId).map(entry -> {
-            entry.setNote(note);
-            entry.setNoteBy(username);
-            entry.setNoteAt(LocalDateTime.now());
-            return auditLogRepository.save(entry);
-        }).orElse(null);
-    }
-
     // Distinct dates that have entries (last 30 days), newest first
     public List<String> getAvailableDates() {
         return auditLogRepository.findAllByOrderByEventTimestampDesc().stream()

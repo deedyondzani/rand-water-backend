@@ -87,50 +87,13 @@ public class AuditLogController {
     }
 
     @PostMapping
-    public ResponseEntity<?> create(Authentication auth,
-                                    @RequestBody Map<String, String> body) {
+    public ResponseEntity<?> create(@RequestBody Map<String, String> body) {
         String eventType = body.getOrDefault("eventType", "WEB_EVENT");
         String plantName = body.get("plantName");
         String details = body.getOrDefault("details", "");
-
-        String username = (auth != null && auth.getName() != null)
-            ? auth.getName()
-            : "unknown";
+        String username = body.getOrDefault("username", "admin");
 
         AuditLog entry = auditLogService.log(username, plantName, eventType, details, "web");
         return ResponseEntity.ok(entry);
-    }
-
-    @PatchMapping("/{id}/note")
-    public ResponseEntity<?> addNote(Authentication auth,
-                                     @PathVariable Integer id,
-                                     @RequestBody Map<String, String> body) {
-        String role = extractRole(auth);
-        if (!"admin".equals(role) && !"operator".equals(role)) {
-            return ResponseEntity.status(403)
-                .body(Map.of("error", "Only admin or operator can add notes"));
-        }
-
-        String note = body.getOrDefault("note", "").trim();
-        if (note.isEmpty()) {
-            return ResponseEntity.badRequest()
-                .body(Map.of("error", "Note cannot be empty"));
-        }
-        if (note.length() > 2000) {
-            return ResponseEntity.badRequest()
-                .body(Map.of("error", "Note too long (max 2000 chars)"));
-        }
-
-        String username = (auth != null) ? auth.getName() : "unknown";
-        AuditLog updated = auditLogService.addNote(id, note, username);
-        if (updated == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        auditLogService.log(username, updated.getPlantName(),
-            "AUDIT_LOG_NOTE_ADDED",
-            "Note added to log #" + id, "web");
-
-        return ResponseEntity.ok(updated);
     }
 }
