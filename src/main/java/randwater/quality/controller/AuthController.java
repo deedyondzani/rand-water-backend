@@ -3,6 +3,7 @@ package randwater.quality.controller;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import randwater.quality.entity.OperatorPlantRight;
 import randwater.quality.entity.User;
@@ -27,6 +28,7 @@ public class AuthController {
     @Autowired private OperatorPlantRightRepository plantRightRepo;
     @Autowired private JwtService jwtService;
     @Autowired private AuditLogService auditLogService;
+    @Autowired private PasswordEncoder passwordEncoder;
 
     public static class LoginRequest {
         public String username;
@@ -71,7 +73,7 @@ public class AuthController {
             return ResponseEntity.status(403).body(Map.of("error", "account is disabled"));
         }
 
-        if (!req.password.equals(user.getPasswordHash())) {
+        if (!passwordEncoder.matches(req.password, user.getPasswordHash())) {
             return ResponseEntity.status(401).body(Map.of("error", "invalid credentials"));
         }
 
@@ -167,12 +169,12 @@ public class AuthController {
 
         boolean forcedReset = u.getPasswordResetRequired() != null && u.getPasswordResetRequired();
         if (!forcedReset) {
-            if (req.currentPassword == null || !req.currentPassword.equals(u.getPasswordHash())) {
+            if (req.currentPassword == null || !passwordEncoder.matches(req.currentPassword, u.getPasswordHash())) {
                 return ResponseEntity.status(403).body(Map.of("error", "current password incorrect"));
             }
         }
 
-        u.setPasswordHash(req.newPassword.trim());
+        u.setPasswordHash(passwordEncoder.encode(req.newPassword.trim()));
         u.setPasswordResetRequired(false);
         userRepo.save(u);
 
