@@ -22,7 +22,7 @@ public class BackupService {
     private final PumpConfigRepository pumpCfgRepo;
     private final ObjectMapper objectMapper;
 
-    @Scheduled(fixedRate = 300000, initialDelay = 60000) // every 5 minutes
+    @Scheduled(fixedRate = 3600000, initialDelay = 60000) // every 1 hour
     public void autoBackup() {
         createBackup("AUTO", "scheduled");
     }
@@ -51,10 +51,12 @@ public class BackupService {
         return saved;
     }
 
+    private static final int KEEP_SNAPSHOTS = 500;
+
     private void prune() {
-        List<BackupSnapshot> all = backupRepo.findTop20ByOrderByIdDesc();
-        if (all.size() > 20) {
-            for (int i = 20; i < all.size(); i++) {
+        List<BackupSnapshot> all = backupRepo.findAllByOrderByIdDesc();
+        if (all.size() > KEEP_SNAPSHOTS) {
+            for (int i = KEEP_SNAPSHOTS; i < all.size(); i++) {
                 backupRepo.delete(all.get(i));
             }
         }

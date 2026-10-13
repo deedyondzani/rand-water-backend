@@ -25,6 +25,7 @@ public class JoeController {
     private final TankStateRepository tankRepo;
     private final AuditLogService auditLogService;
     private final PredictionService predictionService;
+    private final DbGrowthService dbGrowthService;
 
     // ---------- HEALTH ----------
     @GetMapping("/health")
@@ -289,6 +290,65 @@ public class JoeController {
         }
 
         return ResponseEntity.ok(Map.of("answer", answer));
+    }
+
+    // ---------- DB GROWTH ----------
+    @GetMapping("/db-growth")
+    public ResponseEntity<?> dbGrowth(@RequestParam(defaultValue = "90") int days) {
+        List<randwater.quality.entity.DbGrowthSnapshot> snaps = dbGrowthService.recent(days);
+
+        Map<String, Object> current = null;
+        if (!snaps.isEmpty()) {
+            var s = snaps.get(0);
+            current = new java.util.LinkedHashMap<>();
+            current.put("capturedAt", s.getCapturedAt());
+            current.put("auditLogRows", s.getAuditLogRows());
+            current.put("auditLogBytes", s.getAuditLogBytes());
+            current.put("totalDbBytes", s.getTotalDbBytes());
+            current.put("userCount", s.getUserCount());
+            current.put("pumpStateCount", s.getPumpStateCount());
+            current.put("cylinderStateCount", s.getCylinderStateCount());
+            current.put("tankStateCount", s.getTankStateCount());
+            current.put("backupCount", s.getBackupCount());
+            current.put("backupDiskBytes", s.getBackupDiskBytes());
+        }
+
+        Map<String, Object> delta = new java.util.LinkedHashMap<>();
+        if (snaps.size() >= 2) {
+            var newest = snaps.get(0);
+            var oldest = snaps.get(snaps.size() - 1);
+            if (newest.getAuditLogRows() != null && oldest.getAuditLogRows() != null)
+                delta.put("auditLogRowsDelta", newest.getAuditLogRows() - oldest.getAuditLogRows());
+            if (newest.getTotalDbBytes() != null && oldest.getTotalDbBytes() != null)
+                delta.put("totalDbBytesDelta", newest.getTotalDbBytes() - oldest.getTotalDbBytes());
+            delta.put("daysCovered", java.time.Duration.between(
+                oldest.getCapturedAt(), newest.getCapturedAt()).toDays());
+        }
+
+        return ResponseEntity.ok(Map.of(
+            "current", current != null ? current : Map.of(),
+            "delta", delta,
+            "count", snaps.size(),
+            "history", snaps
+        ));
+    }
+
+    @PostMapping("/db-growth/capture")
+    public ResponseEntity<?> triggerDbGrowthCapture() {
+        try {
+            var snap = dbGrowthService.capture("manual via Joe console");
+            try {
+                auditLogService.log("JOE", null, "JOE_DB_SNAPSHOT",
+                    "Manual DB growth snapshot #" + snap.getId(), "joe");
+            } catch (Exception ignored) {}
+            return ResponseEntity.ok(Map.of(
+                "id", snap.getId(),
+                "auditLogRows", snap.getAuditLogRows(),
+                "totalDbBytes", snap.getTotalDbBytes()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
     }
 
     // ---------- Helper: count anomalies (used by /ask) ----------
