@@ -1,6 +1,7 @@
 package randwater.quality.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import randwater.quality.dto.ActiveUserDTO;
@@ -28,6 +29,8 @@ public class UserController {
     @Autowired private RoleRepository roleRepo;
     @Autowired private OperatorPlantRightRepository plantRightRepo;
     @Autowired private AuditLogService auditLogService;
+
+    @Autowired private PasswordEncoder passwordEncoder;
 
     // ---------- helper: map User to DTO ----------
     private UserDTO toDTO(User u) {
@@ -98,7 +101,7 @@ public class UserController {
 
         User u = new User();
         u.setUsername(req.getUsername().trim());
-        u.setPasswordHash(req.getPassword());
+        u.setPasswordHash(passwordEncoder.encode(req.getPassword()));
         u.setFullName(req.getFullName().trim());
         u.setRole(roleOpt.get());
         u.setIsActive(req.getIsActive() != null ? req.getIsActive() : true);
@@ -146,7 +149,7 @@ public class UserController {
         if (req.getIsActive() != null) u.setIsActive(req.getIsActive());
 
         if (req.getPassword() != null && !req.getPassword().isBlank()) {
-            u.setPasswordHash(req.getPassword());
+            u.setPasswordHash(passwordEncoder.encode(req.getPassword()));
             u.setPasswordResetRequired(true);
         }
 
@@ -205,7 +208,7 @@ public class UserController {
         if (opt.isEmpty()) return ResponseEntity.notFound().build();
 
         User u = opt.get();
-        u.setPasswordHash("temp123");
+        u.setPasswordHash(passwordEncoder.encode("temp123"));
         u.setPasswordResetRequired(true);
         userRepo.save(u);
 
