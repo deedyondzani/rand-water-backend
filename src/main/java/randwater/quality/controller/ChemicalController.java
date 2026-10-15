@@ -2,6 +2,7 @@ package randwater.quality.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import randwater.quality.dto.CylinderDTO;
 import randwater.quality.dto.TankDTO;
@@ -23,6 +24,13 @@ import java.util.stream.Collectors;
 @RestController
 @CrossOrigin(origins = "*")
 public class ChemicalController {
+    private String resolveUsername(Authentication auth) {
+        if (auth != null && auth.getName() != null && !auth.getName().isBlank()) {
+            return auth.getName();
+        }
+        return "unknown";
+    }
+
 
     @Autowired private CylinderStateRepository cylinderRepo;
     @Autowired private TankStateRepository tankRepo;
@@ -54,8 +62,10 @@ public class ChemicalController {
     }
 
     @PutMapping("/api/chemical/cl2/{id}/status")
-    public ResponseEntity<?> setCylinderStatus(@PathVariable Integer id,
-                                               @RequestBody Map<String, String> body) {
+    public ResponseEntity<?> setCylinderStatus(Authentication auth,
+                                       @PathVariable Integer id,
+                                       @RequestBody Map<String, String> body) {
+        String username = resolveUsername(auth);
         String status = body.get("status");
         if (status == null || status.isBlank())
             return ResponseEntity.badRequest().body(Map.of("error", "status required"));
@@ -78,7 +88,7 @@ public class ChemicalController {
         try {
             String details = String.format("Cylinder slot %d (Room %d) changed %s to %s",
                 cyl.getSlotNumber(), cyl.getRoomNumber(), oldStatus, status);
-            auditLogService.log("admin", cyl.getPlantName(), "CL2_CYLINDER", details, "api");
+            auditLogService.log(username, cyl.getPlantName(), "CL2_CYLINDER", details, "api");
         } catch (Exception e) { }
 
         return ResponseEntity.ok(new CylinderDTO(cyl.getId(), cyl.getPlantName(),
@@ -88,7 +98,9 @@ public class ChemicalController {
     // ---- BATCH CYLINDER UPDATE (single audit entry) ----
     @PutMapping("/api/chemical/cl2/batch-status")
     @SuppressWarnings("unchecked")
-    public ResponseEntity<?> batchSetCylinderStatus(@RequestBody Map<String, Object> body) {
+    public ResponseEntity<?> batchSetCylinderStatus(Authentication auth,
+                                                    @RequestBody Map<String, Object> body) {
+        String username = resolveUsername(auth);
         String plant = (String) body.get("plant");
         List<Map<String, Object>> changes = (List<Map<String, Object>>) body.get("changes");
 
@@ -123,7 +135,7 @@ public class ChemicalController {
             try {
                 String detail = String.format("Batch update (%d cylinders): %s",
                     updated, String.join("; ", details));
-                auditLogService.log("admin", plant, "CL2_CYLINDER", detail, "api");
+                auditLogService.log(username, plant, "CL2_CYLINDER", detail, "api");
             } catch (Exception ignored) {}
         }
 
@@ -132,9 +144,11 @@ public class ChemicalController {
 
     // ---- BANK-LEVEL SET (Eikenhof) ----
     @PutMapping("/api/chemical/cl2/plant/{plant}/room/{room}/status")
-    public ResponseEntity<?> setBankStatus(@PathVariable String plant,
+    public ResponseEntity<?> setBankStatus(Authentication auth,
+                                           @PathVariable String plant,
                                            @PathVariable Integer room,
                                            @RequestBody Map<String, String> body) {
+        String username = resolveUsername(auth);
         String status = body.get("status");
         if (status == null || status.isBlank())
             return ResponseEntity.badRequest().body(Map.of("error", "status required"));
@@ -160,7 +174,7 @@ public class ChemicalController {
                 if ("Eikenhof".equalsIgnoreCase(plant)) {
                     roomLabel = (room == 1) ? "Top Plant" : "Bottom Plant";
                 }
-                auditLogService.log("admin", plant, "CL2_CYLINDER",
+                auditLogService.log(username, plant, "CL2_CYLINDER",
                     String.format("Bank %s set to %s (%d cylinders)", roomLabel, status, changed), "api");
             } catch (Exception e) { }
         }
@@ -170,9 +184,10 @@ public class ChemicalController {
 
     // ---- BANK RESET TO FULL ----
     @PutMapping("/api/chemical/cl2/plant/{plant}/room/{room}/reset")
-    public ResponseEntity<?> resetBankToFull(@PathVariable String plant,
+    public ResponseEntity<?> resetBankToFull(Authentication auth,
+                                             @PathVariable String plant,
                                              @PathVariable Integer room) {
-        return setBankStatus(plant, room, Map.of("status", "FULL"));
+        return setBankStatus(auth, plant, room, Map.of("status", "FULL"));
     }
 
     // ================ NH3 TANKS ================
@@ -187,8 +202,10 @@ public class ChemicalController {
     }
 
     @PutMapping("/api/chemical/nh3/{id}")
-    public ResponseEntity<?> updateTank(@PathVariable Integer id,
-                                        @RequestBody Map<String, Object> body) {
+    public ResponseEntity<?> updateTank(Authentication auth,
+                                       @PathVariable Integer id,
+                                       @RequestBody Map<String, Object> body) {
+        String username = resolveUsername(auth);
         Optional<TankState> opt = tankRepo.findById(id);
         if (opt.isEmpty()) return ResponseEntity.notFound().build();
 
@@ -229,7 +246,7 @@ public class ChemicalController {
                 if (levelChanged) details.append(",");
                 details.append(" status ").append(oldStatus).append(" to ").append(newStatus);
             }
-            auditLogService.log("admin", tank.getPlantName(), "NH3_TANK", details.toString(), "api");
+            auditLogService.log(username, tank.getPlantName(), "NH3_TANK", details.toString(), "api");
         } catch (Exception e) { }
 
         return ResponseEntity.ok(new TankDTO(tank.getId(), tank.getPlantName(),
@@ -254,8 +271,10 @@ public class ChemicalController {
     }
 
     @PutMapping("/api/chemical/bulk/{plant}")
-    public ResponseEntity<?> updateBulk(@PathVariable String plant,
-                                        @RequestBody Map<String, Object> body) {
+    public ResponseEntity<?> updateBulk(Authentication auth,
+                                       @PathVariable String plant,
+                                       @RequestBody Map<String, Object> body) {
+        String username = resolveUsername(auth);
         Optional<BulkStorage> opt = bulkRepo.findByPlantName(plant);
         BulkStorage bs;
         if (opt.isEmpty()) {
@@ -289,7 +308,7 @@ public class ChemicalController {
         bulkRepo.save(bs);
 
         try {
-            auditLogService.log("admin", plant, "CL2_STORAGE",
+            auditLogService.log(username, plant, "CL2_STORAGE",
                 String.format("Bulk warehouse updated: FULL=%d, EMPTY=%d, O/C=%d", full, empty, oc), "api");
         } catch (Exception e) { }
 

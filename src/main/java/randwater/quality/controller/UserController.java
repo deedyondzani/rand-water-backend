@@ -11,6 +11,7 @@ import randwater.quality.dto.UserDTO;
 import randwater.quality.entity.OperatorPlantRight;
 import randwater.quality.entity.Role;
 import randwater.quality.entity.User;
+import randwater.quality.util.PasswordPolicy;
 import randwater.quality.repository.OperatorPlantRightRepository;
 import randwater.quality.repository.RoleRepository;
 import randwater.quality.repository.UserRepository;
@@ -99,6 +100,11 @@ public class UserController {
         if (roleOpt.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("error", "invalid roleName"));
 
+        String policyError = PasswordPolicy.validate(req.getPassword());
+        if (policyError != null) {
+            return ResponseEntity.badRequest().body(Map.of("error", policyError));
+        }
+
         User u = new User();
         u.setUsername(req.getUsername().trim());
         u.setPasswordHash(passwordEncoder.encode(req.getPassword()));
@@ -149,6 +155,10 @@ public class UserController {
         if (req.getIsActive() != null) u.setIsActive(req.getIsActive());
 
         if (req.getPassword() != null && !req.getPassword().isBlank()) {
+            String policyError = PasswordPolicy.validate(req.getPassword());
+            if (policyError != null) {
+                return ResponseEntity.badRequest().body(Map.of("error", policyError));
+            }
             u.setPasswordHash(passwordEncoder.encode(req.getPassword()));
             u.setPasswordResetRequired(true);
         }

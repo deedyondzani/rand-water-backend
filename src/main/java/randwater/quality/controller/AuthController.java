@@ -11,6 +11,7 @@ import randwater.quality.repository.OperatorPlantRightRepository;
 import randwater.quality.repository.UserRepository;
 import randwater.quality.service.AuditLogService;
 import randwater.quality.service.JwtService;
+import randwater.quality.util.PasswordPolicy;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -159,8 +160,9 @@ public class AuthController {
         if (req == null || req.newPassword == null || req.newPassword.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "newPassword required"));
         }
-        if (req.newPassword.trim().length() < 4) {
-            return ResponseEntity.badRequest().body(Map.of("error", "password too short (min 4)"));
+        String policyError = PasswordPolicy.validate(req.newPassword.trim());
+        if (policyError != null) {
+            return ResponseEntity.badRequest().body(Map.of("error", policyError));
         }
 
         Optional<User> opt = userRepo.findByUsername(auth.getName());
